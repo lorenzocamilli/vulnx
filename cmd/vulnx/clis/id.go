@@ -106,7 +106,10 @@ vulnx id --no-color CVE-2024-1234
 			if len(vulnIDs) == 0 {
 				gologger.Fatal().Msg("No vulnerability IDs provided. Use command line arguments, --file, or pipe IDs via stdin")
 			}
-
+			
+			if csvFile != "" && !strings.HasSuffix(csvFile, ".csv") {
+				gologger.Fatal().Msg("csv output file must have .csv extension")
+			}
 			// Remove duplicates and validate IDs
 			vulnIDs = removeDuplicates(vulnIDs)
 			for _, vulnID := range vulnIDs {

@@ -61,6 +61,9 @@ var (
 	// Add global no-color flag
 	noColor bool
 
+	// Add global csv output flag
+	csvFile string
+	
 	// Global disable update check flag
 	globalDisableUpdateCheck bool
 
@@ -185,6 +188,9 @@ func init() {
 
 	// Add persistent no-color flag
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
+
+	// Add persistent csv output flag
+	rootCmd.PersistentFlags().StringVar(&csvFile, "csv", "", "write output to CSV file (error if file exists)")
 
 	// Add persistent disable update check flag
 	rootCmd.PersistentFlags().BoolVar(&globalDisableUpdateCheck, "disable-update-check", false, "disable automatic vulnx update check")

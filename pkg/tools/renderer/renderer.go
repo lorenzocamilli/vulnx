@@ -31,8 +31,8 @@ func RenderCSV(entries []*Entry) ([]byte, error) {
 	}
 
 	for _, e := range entries {
-		vendors := extractDistinctVendors(e.AffectedProducts)
-		products := extractDistinctProducts(e.AffectedProducts)
+		vendors := distinctVendors(e.AffectedProducts)
+		products := distinctProducts(e.AffectedProducts)
 		hackerone := e.H1 != nil && e.H1.Reports > 0
 
 		row := []string{

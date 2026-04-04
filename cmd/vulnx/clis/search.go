@@ -616,20 +616,6 @@ func validateSearchInputs() error {
 		return fmt.Errorf("facet-size must be between 1 and 1000")
 	}
 
-	// Validate output file path if specified
-	if outputFile != "" {
-		if !strings.HasSuffix(outputFile, ".json") {
-			return fmt.Errorf("output file must have .json extension")
-		}
-	}
-
-	// Validate csv output file path if specified
-	if csvFile != "" {
-		if !strings.HasSuffix(csvFile, ".csv") {
-			return fmt.Errorf("csv output file must have .csv extension")
-		}
-	}
-
 	return nil
 }
 

@@ -96,6 +96,10 @@ var (
 					showVersionInfo()
 				}
 			}
+			if err := validateOutputFlags(); err != nil {
+				return err
+			}
+
 			err := ensureVulnxClientInitialized(cmd)
 			if err != nil {
 				return err
@@ -499,6 +503,32 @@ func removeDuplicateStrings(ids []string) []string {
 	}
 
 	return result
+}
+
+// validateOutputFlags enforces mutual exclusivity and extension rules for the
+// three output-mode flags (--json, --output, --csv). Called from PersistentPreRunE
+// so it applies uniformly to every subcommand, including the stdin auto-detect path.
+func validateOutputFlags() error {
+	outputModes := 0
+	if jsonOutput {
+		outputModes++
+	}
+	if outputFile != "" {
+		outputModes++
+	}
+	if csvFile != "" {
+		outputModes++
+	}
+	if outputModes > 1 {
+		return fmt.Errorf("--json, --output, and --csv are mutually exclusive; specify at most one")
+	}
+	if outputFile != "" && !strings.HasSuffix(outputFile, ".json") {
+		return fmt.Errorf("--output file must have a .json extension")
+	}
+	if csvFile != "" && !strings.HasSuffix(csvFile, ".csv") {
+		return fmt.Errorf("--csv file must have a .csv extension")
+	}
+	return nil
 }
 
 func executeIDWithIDs(cveIDs []string) error {

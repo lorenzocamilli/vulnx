@@ -541,3 +541,23 @@ func TestEscapeCSVFormula(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderFiltersCSV(t *testing.T) {
+	got, err := RenderFiltersCSV([]vulnx.VulnerabilityFilter{{
+		Field:         "severity",
+		DataType:      "string",
+		Description:   "Severity, e.g. high",
+		CanSort:       true,
+		FacetPossible: true,
+		Examples:      []string{"severity:high", "severity:critical"},
+		EnumValues:    []string{"low", "high"},
+	}})
+	if err != nil {
+		t.Fatalf("RenderFiltersCSV: %v", err)
+	}
+	want := "field,data_type,description,can_sort,facet_possible,search_analyzer,examples,enum_values\n" +
+		"severity,string,\"Severity, e.g. high\",true,true,,severity:high;severity:critical,low;high\n"
+	if string(got) != want {
+		t.Errorf("RenderFiltersCSV mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}

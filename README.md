@@ -105,6 +105,7 @@ vulnx search --detailed "xss"                # Detailed output like 'id' command
 vulnx filters                           # Show all available search fields
 vulnx filters --json                    # Machine-readable field list
 vulnx filters --output fields.json      # Save field info to file
+vulnx filters --output fields.csv       # Save field info as CSV
 ```
 
 The `filters` command shows detailed information about all searchable fields including:

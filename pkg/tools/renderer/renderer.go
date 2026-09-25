@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/projectdiscovery/vulnx/v2"
 )
 
 // Render generates formatted output for vulnerability entries using the provided layout
@@ -14,12 +16,12 @@ func Render(entries []*Entry, layout []LayoutLine, totalResults, shownResults in
 	return RenderWithColors(entries, layout, totalResults, shownResults, DefaultColorConfig())
 }
 
-type csvColumn struct {
+type csvColumn[T any] struct {
 	name  string
-	value func(*Entry) string
+	value func(T) string
 }
 
-var csvColumns = []csvColumn{
+var entryCSVColumns = []csvColumn[*Entry]{
 	{"id", func(e *Entry) string { return e.DocID }},
 	{"severity", func(e *Entry) string { return e.Severity }},
 	{"cvss_score", func(e *Entry) string { return strconv.FormatFloat(e.CvssScore, 'f', -1, 64) }},
@@ -36,25 +38,48 @@ var csvColumns = []csvColumn{
 	{"title", func(e *Entry) string { return e.Name }},
 }
 
+var filterCSVColumns = []csvColumn[vulnx.VulnerabilityFilter]{
+	{"field", func(f vulnx.VulnerabilityFilter) string { return f.Field }},
+	{"data_type", func(f vulnx.VulnerabilityFilter) string { return f.DataType }},
+	{"description", func(f vulnx.VulnerabilityFilter) string { return f.Description }},
+	{"can_sort", func(f vulnx.VulnerabilityFilter) string { return strconv.FormatBool(f.CanSort) }},
+	{"facet_possible", func(f vulnx.VulnerabilityFilter) string { return strconv.FormatBool(f.FacetPossible) }},
+	{"search_analyzer", func(f vulnx.VulnerabilityFilter) string { return f.SearchAnalyzer }},
+	{"examples", func(f vulnx.VulnerabilityFilter) string { return strings.Join(f.Examples, ";") }},
+	{"enum_values", func(f vulnx.VulnerabilityFilter) string { return strings.Join(f.EnumValues, ";") }},
+}
+
 // RenderCSV generates a CSV representation of vulnerability entries, one row per entry.
 func RenderCSV(entries []*Entry) ([]byte, error) {
+	nonNil := make([]*Entry, 0, len(entries))
+	for _, e := range entries {
+		if e != nil {
+			nonNil = append(nonNil, e)
+		}
+	}
+	return renderCSV(nonNil, entryCSVColumns)
+}
+
+// RenderFiltersCSV generates a CSV representation of search filters, one row per filter.
+func RenderFiltersCSV(filters []vulnx.VulnerabilityFilter) ([]byte, error) {
+	return renderCSV(filters, filterCSVColumns)
+}
+
+func renderCSV[T any](items []T, columns []csvColumn[T]) ([]byte, error) {
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
 
-	row := make([]string, len(csvColumns))
-	for i, col := range csvColumns {
+	row := make([]string, len(columns))
+	for i, col := range columns {
 		row[i] = col.name
 	}
 	if err := w.Write(row); err != nil {
 		return nil, err
 	}
 
-	for _, e := range entries {
-		if e == nil {
-			continue
-		}
-		for i, col := range csvColumns {
-			row[i] = escapeCSVFormula(col.value(e))
+	for _, item := range items {
+		for i, col := range columns {
+			row[i] = escapeCSVFormula(col.value(item))
 		}
 		if err := w.Write(row); err != nil {
 			return nil, err
@@ -66,7 +91,7 @@ func RenderCSV(entries []*Entry) ([]byte, error) {
 }
 
 // escapeCSVFormula neutralizes cells that spreadsheet apps would evaluate as formulas.
-// Titles and tags come from upstream advisories, so they are untrusted input.
+// Values come from the API (e.g. advisory titles), so they are untrusted input.
 func escapeCSVFormula(cell string) string {
 	if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
 		return "'" + cell

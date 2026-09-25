@@ -14,42 +14,47 @@ func Render(entries []*Entry, layout []LayoutLine, totalResults, shownResults in
 	return RenderWithColors(entries, layout, totalResults, shownResults, DefaultColorConfig())
 }
 
-// RenderCSV generates a CSV representation of vulnerability entries.
-// Columns: id, severity, cvss_score, epss_score, is_kev, is_template, poc_count,
-// hackerone, is_patch_available, age_in_days, vendors, products, tags, title
+type csvColumn struct {
+	name  string
+	value func(*Entry) string
+}
+
+var csvColumns = []csvColumn{
+	{"id", func(e *Entry) string { return e.DocID }},
+	{"severity", func(e *Entry) string { return e.Severity }},
+	{"cvss_score", func(e *Entry) string { return strconv.FormatFloat(e.CvssScore, 'f', -1, 64) }},
+	{"epss_score", func(e *Entry) string { return strconv.FormatFloat(e.EpssScore, 'f', -1, 64) }},
+	{"is_kev", func(e *Entry) string { return strconv.FormatBool(e.IsKev) }},
+	{"is_template", func(e *Entry) string { return strconv.FormatBool(e.IsTemplate) }},
+	{"poc_count", func(e *Entry) string { return strconv.Itoa(e.PocCount) }},
+	{"hackerone", func(e *Entry) string { return strconv.FormatBool(e.H1 != nil && e.H1.Reports > 0) }},
+	{"is_patch_available", func(e *Entry) string { return strconv.FormatBool(e.IsPatchAvailable) }},
+	{"age_in_days", func(e *Entry) string { return strconv.Itoa(e.AgeInDays) }},
+	{"vendors", func(e *Entry) string { return strings.Join(distinct(e.AffectedProducts, vendorOf), ";") }},
+	{"products", func(e *Entry) string { return strings.Join(distinct(e.AffectedProducts, productOf), ";") }},
+	{"tags", func(e *Entry) string { return strings.Join(e.Tags, ";") }},
+	{"title", func(e *Entry) string { return e.Name }},
+}
+
+// RenderCSV generates a CSV representation of vulnerability entries, one row per entry.
 func RenderCSV(entries []*Entry) ([]byte, error) {
 	var buf bytes.Buffer
 	w := csv.NewWriter(&buf)
 
-	header := []string{
-		"id", "severity", "cvss_score", "epss_score",
-		"is_kev", "is_template", "poc_count", "hackerone",
-		"is_patch_available", "age_in_days", "vendors", "products", "tags", "title",
+	row := make([]string, len(csvColumns))
+	for i, col := range csvColumns {
+		row[i] = col.name
 	}
-	if err := w.Write(header); err != nil {
+	if err := w.Write(row); err != nil {
 		return nil, err
 	}
 
 	for _, e := range entries {
-		vendors := distinctVendors(e.AffectedProducts)
-		products := distinctProducts(e.AffectedProducts)
-		hackerone := e.H1 != nil && e.H1.Reports > 0
-
-		row := []string{
-			e.DocID,
-			e.Severity,
-			strconv.FormatFloat(e.CvssScore, 'f', -1, 64),
-			strconv.FormatFloat(e.EpssScore, 'f', -1, 64),
-			strconv.FormatBool(e.IsKev),
-			strconv.FormatBool(e.IsTemplate),
-			strconv.Itoa(e.PocCount),
-			strconv.FormatBool(hackerone),
-			strconv.FormatBool(e.IsPatchAvailable),
-			strconv.Itoa(e.AgeInDays),
-			strings.Join(vendors, ";"),
-			strings.Join(products, ";"),
-			strings.Join(e.Tags, ";"),
-			e.Name,
+		if e == nil {
+			continue
+		}
+		for i, col := range csvColumns {
+			row[i] = escapeCSVFormula(col.value(e))
 		}
 		if err := w.Write(row); err != nil {
 			return nil, err
@@ -58,6 +63,15 @@ func RenderCSV(entries []*Entry) ([]byte, error) {
 
 	w.Flush()
 	return buf.Bytes(), w.Error()
+}
+
+// escapeCSVFormula neutralizes cells that spreadsheet apps would evaluate as formulas.
+// Titles and tags come from upstream advisories, so they are untrusted input.
+func escapeCSVFormula(cell string) string {
+	if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
+		return "'" + cell
+	}
+	return cell
 }
 
 // RenderDetailed generates detailed formatted output for a single vulnerability

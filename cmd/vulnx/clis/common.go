@@ -15,7 +15,9 @@ import (
 
 	_ "embed"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -61,9 +63,6 @@ var (
 	// Add global no-color flag
 	noColor bool
 
-	// Add global csv output flag
-	csvFile string
-	
 	// Global disable update check flag
 	globalDisableUpdateCheck bool
 
@@ -96,10 +95,6 @@ var (
 					showVersionInfo()
 				}
 			}
-			if err := validateOutputFlags(); err != nil {
-				return err
-			}
-
 			err := ensureVulnxClientInitialized(cmd)
 			if err != nil {
 				return err
@@ -185,16 +180,13 @@ func init() {
 
 	// Add persistent json and output flags
 	rootCmd.PersistentFlags().BoolVarP(&jsonOutput, "json", "j", false, "output raw json (for piping, disables yaml output)")
-	rootCmd.PersistentFlags().StringVarP(&outputFile, "output", "o", "", "write output to file in json format (error if file exists)")
+	rootCmd.PersistentFlags().StringVarP(&outputFile, "output", "o", "", "write output to file, json or csv by extension (error if file exists)")
 
 	// Add persistent silent flag
 	rootCmd.PersistentFlags().BoolVar(&silent, "silent", false, "silent mode (suppress banner and non-essential output)")
 
 	// Add persistent no-color flag
 	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "disable colored output")
-
-	// Add persistent csv output flag
-	rootCmd.PersistentFlags().StringVar(&csvFile, "csv", "", "write output to CSV file (error if file exists)")
 
 	// Add persistent disable update check flag
 	rootCmd.PersistentFlags().BoolVar(&globalDisableUpdateCheck, "disable-update-check", false, "disable automatic vulnx update check")
@@ -505,56 +497,64 @@ func removeDuplicateStrings(ids []string) []string {
 	return result
 }
 
-// csvRequiredFields are the API field names needed to populate every CSV column.
-var csvRequiredFields = []string{
-	"doc_id", "name", "severity", "cvss_score", "epss_score",
-	"is_kev", "is_template", "poc_count", "h1",
-	"is_patch_available", "age_in_days", "affected_products", "tags",
+// isCSVOutput reports whether --output asks for CSV. Any other extension keeps the JSON default.
+func isCSVOutput() bool {
+	return strings.EqualFold(filepath.Ext(outputFile), ".csv")
 }
 
-// mergeFields returns base with any elements from extra appended that are not already present.
-func mergeFields(base, extra []string) []string {
-	if len(base) == 0 {
-		return base // no field restriction at all — API returns everything
+// writeVulnsOutput writes vulns to --output as CSV or JSON, or prints JSON to stdout.
+// A single requested ID is emitted as an object rather than an array.
+func writeVulnsOutput(vulns []*vulnx.Vulnerability, single bool) {
+	var data []byte
+	var err error
+	switch {
+	case isCSVOutput():
+		data, err = renderVulnsCSV(vulns)
+	case single:
+		data, err = json.MarshalIndent(vulns[0], "", "  ")
+	default:
+		data, err = json.MarshalIndent(vulns, "", "  ")
 	}
-	seen := make(map[string]bool, len(base))
-	for _, f := range base {
-		seen[f] = true
+	if err != nil {
+		gologger.Fatal().Msgf("Failed to render output: %s", err)
 	}
-	result := make([]string, len(base))
-	copy(result, base)
-	for _, f := range extra {
-		if !seen[f] {
-			result = append(result, f)
-		}
-	}
-	return result
-}
 
-// validateOutputFlags enforces mutual exclusivity and extension rules for the
-// three output-mode flags (--json, --output, --csv). Called from PersistentPreRunE
-// so it applies uniformly to every subcommand, including the stdin auto-detect path.
-func validateOutputFlags() error {
-	outputModes := 0
-	if jsonOutput {
-		outputModes++
-	}
 	if outputFile != "" {
-		outputModes++
+		if err := writeNewFile(outputFile, data); err != nil {
+			gologger.Fatal().Msgf("%s", err)
+		}
+		gologger.Info().Msgf("Wrote %d vulnerability(s) to file: %s", len(vulns), outputFile)
+		return
 	}
-	if csvFile != "" {
-		outputModes++
+
+	if _, err := os.Stdout.Write(append(data, '\n')); err != nil {
+		gologger.Error().Msgf("Failed to write JSON to stdout: %s", err)
 	}
-	if outputModes > 1 {
-		return fmt.Errorf("--json, --output, and --csv are mutually exclusive; specify at most one")
+}
+
+// renderVulnsCSV converts vulnerabilities to CSV rows.
+func renderVulnsCSV(vulns []*vulnx.Vulnerability) ([]byte, error) {
+	entries := make([]*renderer.Entry, 0, len(vulns))
+	for _, vuln := range vulns {
+		entries = append(entries, renderer.FromVulnerability(vuln))
 	}
-	if outputFile != "" && !strings.HasSuffix(outputFile, ".json") {
-		return fmt.Errorf("--output file must have a .json extension")
+	return renderer.RenderCSV(entries)
+}
+
+// writeNewFile writes data to path, refusing to overwrite an existing file.
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("output file already exists: %s", path)
 	}
-	if csvFile != "" && !strings.HasSuffix(csvFile, ".csv") {
-		return fmt.Errorf("--csv file must have a .csv extension")
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
 	}
-	return nil
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to write to output file: %w", err)
+	}
+	return f.Close()
 }
 
 func executeIDWithIDs(cveIDs []string) error {
@@ -572,8 +572,8 @@ func runIDCommandWithIDs(cveIDs []string) error {
 	// Use the global vulnxClient
 	handler := id.NewHandler(vulnxClient)
 
-	// Handle JSON/CSV output for multiple IDs
-	if jsonOutput || outputFile != "" || csvFile != "" {
+	// Handle JSON output for multiple IDs
+	if jsonOutput || outputFile != "" {
 		var allVulns []*vulnx.Vulnerability
 		for _, vulnID := range cveIDs {
 			vuln, err := handler.Get(vulnID)
@@ -592,79 +592,7 @@ func runIDCommandWithIDs(cveIDs []string) error {
 			gologger.Fatal().Msg("No vulnerabilities were successfully retrieved")
 		}
 
-		// Handle CSV output
-		if csvFile != "" {
-			csvEntries := make([]*renderer.Entry, 0, len(allVulns))
-			for _, vuln := range allVulns {
-				entry := renderer.FromVulnerability(vuln)
-				if entry != nil {
-					csvEntries = append(csvEntries, entry)
-				}
-			}
-			csvBytes, err := renderer.RenderCSV(csvEntries)
-			if err != nil {
-				gologger.Fatal().Msgf("Failed to render CSV: %s", err)
-			}
-			if _, err := os.Stat(csvFile); err == nil {
-				gologger.Fatal().Msgf("Output file already exists: %s", csvFile)
-			}
-			f, err := os.OpenFile(csvFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-			if err != nil {
-				gologger.Fatal().Msgf("Failed to create output file: %s", err)
-			}
-			defer func() {
-				if err := f.Close(); err != nil {
-					gologger.Error().Msgf("Failed to close output file: %s", err)
-				}
-			}()
-			if _, err := f.Write(csvBytes); err != nil {
-				gologger.Fatal().Msgf("Failed to write to output file: %s", err)
-			}
-			gologger.Info().Msgf("Wrote %d vulnerability(s) to file: %s", len(allVulns), csvFile)
-			return nil
-		}
-
-		// Marshal single item or array based on input
-		var jsonBytes []byte
-		var err error
-		if len(cveIDs) == 1 && len(allVulns) == 1 {
-			jsonBytes, err = json.MarshalIndent(allVulns[0], "", "  ")
-		} else {
-			jsonBytes, err = json.MarshalIndent(allVulns, "", "  ")
-		}
-
-		if err != nil {
-			gologger.Fatal().Msgf("Failed to marshal JSON: %s", err)
-		}
-
-		if outputFile != "" {
-			// Check if file exists
-			if _, err := os.Stat(outputFile); err == nil {
-				gologger.Fatal().Msgf("Output file already exists: %s", outputFile)
-			}
-			f, err := os.OpenFile(outputFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-			if err != nil {
-				gologger.Fatal().Msgf("Failed to create output file: %s", err)
-			}
-			defer func() {
-				if err := f.Close(); err != nil {
-					gologger.Error().Msgf("Failed to close output file: %s", err)
-				}
-			}()
-			if _, err := f.Write(jsonBytes); err != nil {
-				gologger.Fatal().Msgf("Failed to write to output file: %s", err)
-			}
-			gologger.Info().Msgf("Wrote %d vulnerability(s) to file: %s", len(allVulns), outputFile)
-			return nil
-		}
-
-		// Print to stdout
-		if _, err := os.Stdout.Write(jsonBytes); err != nil {
-			gologger.Error().Msgf("Failed to write JSON to stdout: %s", err)
-		}
-		if _, err := os.Stdout.Write([]byte("\n")); err != nil {
-			gologger.Error().Msgf("Failed to write newline to stdout: %s", err)
-		}
+		writeVulnsOutput(allVulns, len(cveIDs) == 1 && len(allVulns) == 1)
 		return nil
 	}
 

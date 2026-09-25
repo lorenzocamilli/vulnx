@@ -78,6 +78,7 @@ vulnx analyze --fields affected_products.vendor
 ```bash
 vulnx search "apache" --json              # Machine-readable JSON
 vulnx search "apache" --output results.json  # Save to file
+vulnx search "apache" --output results.csv   # Save as CSV (format picked by extension)
 vulnx search "apache" --silent            # Quiet output
 ```
 
@@ -256,6 +257,7 @@ vulnx id --json CVE-2024-1234 CVE-2024-5678
 
 # Save to file
 vulnx id --output vulns.json --file ids.txt
+vulnx id --output vulns.csv --file ids.txt
 
 # Pipeline integration
 cat report.txt | grep -o 'CVE-[0-9]\{4\}-[0-9]\+' | vulnx id --json
